@@ -218,6 +218,73 @@ env:
 - Improves reliability when using EEx to generate whitespace-sensitive formats like YAML/JSON (such as in Kubernetes/OpenShift tooling or deployment scripts).
 - Simplifies template authoring and maintenance by removing the need for awkward single-line tag tricks or post-processing scripts.
 
-## Next Steps
+## Status & Conclusion
 
-Upon discussion and acceptance on the [Elixir Core mailing list](https://groups.google.com/group/elixir-lang-core), an issue and pull request will be submitted to the Elixir core repository implementing the tokenizer and compiler enhancements in `lib/eex`.
+**Status**: On Hold / Shelved (As of August 2, 2026).
+
+### Tradeoff Analysis & Evaluation
+
+#### Executive Summary
+
+| Dimension | Pursuing Proposal (`<%-` / `-%>`) | Shelving / Status Quo |
+| :--- | :--- | :--- |
+| **Primary Benefit** | Eliminates awkward tag-squeezing workarounds for non-Elixir outputs (YAML, Markdown, Dockerfiles). | Zero core syntax additions; keeps EEx standard library strictly minimal. |
+| **Ecosystem Churn** | Requires updates to tree-sitter parsers, VS Code / LSP extensions, formatters, and linters. | Zero tooling churn. Existing generator templates remain untouched. |
+| **Time to Usability** | **Delayed by 1–3 years** for major tools (`phx.new`) due to Elixir version floor compatibility requirements. | Immediate reliance on existing patterns (`trim: true`, `Code.format_string!`, or tag placement). |
+| **Cognitive Load** | Risk of "hyphen soup" and cargo-culting syntax choices across templates. | Developer learning remains minimal, though cross-ecosystem developers may find missing tag controls surprising. |
+| **Ecosystem Domain Scope** | Useful mainly for raw text/YAML/JSON; obsolete for Elixir code (handled by `Code.format_string!`) and HTML (handled by HEEx). | Avoids adding core complexity to a template engine whose domain scope has shrunk due to HEEx and `Code.format_string!`. |
+
+---
+
+### Detailed Dimension-by-Dimension Analysis
+
+#### 1. Time to Usability & Ecosystem Adoption Lag
+* **Pursuing**:
+  * If merged into Elixir (e.g., Elixir 1.21), core tools like `phx.new` or community generator libraries (e.g., `igniter`, `ash`, custom Mix tasks) **cannot adopt `<%-` or `-%>` until their minimum supported Elixir version is bumped to 1.21+**.
+  * Because installer generators target wide compatibility across older Elixir versions, it would take **18 to 36 months** before major ecosystem generators can leverage the feature without breaking compatibility for users on older Elixir releases.
+* **Shelving**:
+  * Avoids a multi-year transitional period where template authors have to remember whether they can use hyphen tags based on the library's `mix.exs` `elixir` version constraint.
+
+#### 2. Lessons from Other Ecosystems: Go / Helm, ERB, Jinja, Handlebars
+* **Go / Helm (`{{-` and `-}}`)**:
+  * *Lesson*: In Helm charts, tag-level whitespace controls created widespread **"Hyphen Soup"**—developers defensively placed `-` on almost every tag (`{{- if .Values.enabled -}} {{- range .Items -}}`), rendering template source code visually chaotic and difficult to audit.
+  * *Lesson*: Trimming left-side whitespace (`{{-`) frequently collapsed intentional single spaces between words (`Hello {{- .Name}}` -> `HelloWorld`), creating subtle rendering bugs.
+* **Ruby ERB (`-%>`)**:
+  * *Lesson*: Coupled tag behavior to caller-side configuration (`trim_mode: "-"`). Omitting the flag at execution time resulted in runtime syntax errors. The proposal wisely avoids this by making trimming parser-native, but the ERB syntax legacy remains somewhat fragmented.
+* **Handlebars (`{{~` / `~}}` & Standalone Tag Removal)**:
+  * *Lesson*: Handlebars automatically strips line breaks around "standalone" block tags. However, **this approach is non-viable for Elixir EEx**: making it the default would instantly change how established templates render across Elixir versions (an unjustifiable breaking change in core), while gating it behind a new callsite flag (e.g., `trim_standalone: true`) suffers from the same flaw as global `trim: true` (lacking tag-level control and granularity).
+
+#### 3. Churn & Tooling Ecosystem Impact
+* **Pursuing**:
+  * **Parser & Syntax Highlighting**: Tree-sitter Elixir, ElixirLS, Lexical LSP, VS Code extensions, Vim/Neovim plugins, GitHub Linguist, and HEEx/EEx HTML formatters must be updated to recognize `<%-` and `-%>` as valid tag boundaries rather than syntax errors or math expressions.
+  * **Linter & Formatter Rules**: Linters (like `Credo`) and code formatters will need rules around spacing (e.g., whether `<%-if` vs `<%- if` is enforced).
+* **Shelving**:
+  * Zero churn for language tooling, AST parsers, and editor extensions.
+
+#### 4. Domain Scope: EEx vs. HEEx vs. `Code.format_string!/1`
+* **Where EEx is used today**:
+  1. **Elixir Source Code Generators** (`mix new`, `phx.gen.html`, etc.): In these cases, rendered string outputs can already be passed through `Code.format_string!/1`, which automatically normalizes all indentation, blank lines, and whitespace perfectly without needing any template-level tag tricks.
+  2. **HTML Web Rendering**: Almost entirely superseded by **HEEx** (HTML EEx), which uses an HTML-aware parser with component tree indentation, making EEx whitespace controls irrelevant for web views.
+  3. **Raw Text / Manifest Generators** (YAML, JSON, Dockerfiles, Shell scripts, Markdown): This is the **only domain** where `Code.format_string!` cannot run and EEx raw text output matters.
+* **Tradeoff**: Adding standard library syntax to `EEx` for a domain that has largely narrowed down to raw text/YAML generation may represent disproportionate core language weight.
+
+#### 5. Added Documentation & Specification Complexity
+* **Pursuing**:
+  * **Spec Edge Cases**: The core team must specify and document how tag-level hyphens interact with:
+    * Global `trim: true` option (Does `<%-` override `trim: false`? How do they combine?).
+    * Indentation preservation vs line break stripping.
+    * Expression output tags (`<%= val -%>` vs `<%-= val %>`).
+  * **Docs Overhead**: Adds doc sections in `EEx` explaining left-trimming vs right-trimming, best practices, and warning against over-hyphenating templates.
+* **Shelving**:
+  * Keeps EEx documentation concise and predictable.
+
+---
+
+### Recommendation & Decision
+
+1. **For Elixir Code Generation**: Pipe template output through `Code.format_string!/1`. This eliminates all template whitespace issues cleanly without needing language syntax additions.
+2. **For HTML Web Rendering**: Use HEEx.
+3. **For Non-Elixir Raw Text / YAML**: Note that implicit standalone line stripping is non-viable (as it would either break established rendering behavior across versions or lack callsite granularity). Domain-specific post-processing or specialized third-party generator utilities remain the cleanest solution for raw manifests without mutating EEx core syntax.
+
+Given the ecosystem version floor lag (requiring Elixir 1.21+), tooling churn across LSPs/parsers, and the narrowed domain scope of raw EEx, this proposal is **placed on hold as of August 2, 2026**.
+
